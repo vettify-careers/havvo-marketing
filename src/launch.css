@@ -10,3 +10,18 @@ footer{grid-template-columns:minmax(190px,.8fr) minmax(0,1.6fr) auto;gap:26px}
 .footer-legal a{color:#406158}
 footer small{padding-top:5px}
 @media(max-width:760px){footer{grid-template-columns:1fr;gap:14px}.footer-link-row{gap:3px 15px}.footer-legal{padding-top:10px}footer small{padding-top:0;white-space:normal}}
+
+/* Tap targets. Inline text buttons and nav links were laid out at their text
+   height (16-24px), below the 44px comfortable minimum on touch. Height is
+   added with padding on the control itself, so the hit area grows rather than
+   just the spacing around it. Negative margins keep the visual rhythm. */
+.audiences button,.text-button{display:inline-flex;align-items:center;min-height:44px}
+@media(max-width:760px){
+  .nav nav.open{gap:2px;padding:8px 20px 14px}
+  .nav nav button{min-height:44px;display:flex;align-items:center}
+  .footer-link-row{gap:0 18px}
+  .footer-links button,.footer-links a{min-height:40px}
+  .footer-legal{padding-top:4px}
+  .audiences button,.text-button{min-height:44px;margin-bottom:-6px}
+  .faq article button{padding:18px 0 14px}
+}
