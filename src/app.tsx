@@ -6,6 +6,57 @@ import "./launch.css";
 const APP_URL = "https://app.havvo.co.uk";
 const API_URL = (import.meta.env.VITE_API_URL ?? "http://localhost:3001").replace(/\/$/, "");
 
+/* Where a visitor came from, captured once at load and held for the session.
+
+   Read here rather than inside the form, because navigation is client-side: by
+   the time someone reaches the contact page, the `?utm_source=` that brought
+   them to the home page has gone from the URL. Session storage rather than a
+   cookie — this is attribution for our own funnel, it expires with the tab, and
+   it needs no consent banner to be lawful. */
+const ATTRIBUTION_KEY = "havvo.attribution";
+
+type Attribution = { referrer?: string | null; utmSource?: string | null; utmMedium?: string | null; utmCampaign?: string | null };
+
+function captureAttribution() {
+  // This module is loaded in Node by scripts/prerender.mjs, where there is no
+  // window at all. Checked rather than left to the catch below, because a
+  // ReferenceError swallowed by a `catch {}` is indistinguishable from storage
+  // being unavailable, and only one of those is worth investigating.
+  if (typeof window === "undefined") return;
+  try {
+    // First touch wins. A second page view carries no parameters, and letting it
+    // write would erase the campaign that actually delivered the visit.
+    if (sessionStorage.getItem(ATTRIBUTION_KEY)) return;
+    const params = new URLSearchParams(window.location.search);
+    const referrer = document.referrer;
+    sessionStorage.setItem(ATTRIBUTION_KEY, JSON.stringify({
+      // Our own pages are not a referrer; recording them would bury the real
+      // source under a list of internal hops.
+      referrer: referrer && !referrer.includes(window.location.host) ? referrer : null,
+      utmSource: params.get("utm_source"), utmMedium: params.get("utm_medium"), utmCampaign: params.get("utm_campaign"),
+    } satisfies Attribution));
+  } catch { /* private mode can refuse storage entirely; knowing the channel is not worth an exception on page load */ }
+}
+
+function attribution(): Attribution {
+  if (typeof window === "undefined") return {};
+  try { return JSON.parse(sessionStorage.getItem(ATTRIBUTION_KEY) ?? "{}") as Attribution; } catch { return {}; }
+}
+
+captureAttribution();
+
+/* The trades a job can need. Lower case because these words are used in prose in
+   outreach subject lines ("Reliable plumbing work in Manchester"), and because
+   the API normalises them to match `outreach_contacts.trades`. */
+const TRADE_OPTIONS = ["plumbing", "electrical", "heating and gas", "carpentry", "painting and decorating", "roofing", "locksmith", "appliance repair", "drainage", "glazing", "grounds and cleaning", "general maintenance"];
+
+/* Suggestions, not a fixed list — the field stays free text through `datalist`,
+   because the answer we most need is the one nobody thought to offer. This is
+   what decides the integration roadmap, so naming the common systems raises the
+   chance of a usable answer over an empty box. */
+const MANAGER_SOFTWARE = ["Fixflo", "Arthur", "Reapit", "Alto", "Jupix", "MRI Qube", "Yardi", "PropertyFile", "PlanRadar", "PayProp", "Goodlord", "Spreadsheets and email"];
+const TRADE_SOFTWARE = ["Jobber", "Tradify", "ServiceM8", "Simpro", "Commusoft", "Joblogic", "Powered Now", "Xero", "QuickBooks", "Paper and phone calls"];
+
 const sections = {
   managers: ["One clear queue for every property", "Approve quotes, visits and completed work", "A complete record for every decision"],
   trades: ["Win well-scoped local work", "Keep photos, messages and sign-off in one job", "Get paid through your own connected Stripe account"],
@@ -86,9 +137,131 @@ function Home({ go }: { go: Go }) { return <main><section className="hero"><div 
 
 function LaunchSections({ go }: { go: Go }) { const [open, setOpen] = useState<number | null>(0); const faqs = [["Who is Havvo for?", "Havvo is being built for UK residential property teams, landlords, residents and independent trades who want one clear repair workflow."], ["How does payment work?", "A customer authorises the agreed job amount before work begins. Payment is captured only after completion evidence is approved. Trades connect their own Stripe account."], ["What happens if the resident is not home?", "The trade can share arrival and completion photos in the job chat. The resident or manager can review the evidence and approve remotely."], ["Does Havvo replace emergency services?", "No. Gas, fire, electrical danger, flooding, structural risk or immediate health and safety concerns must be escalated to an appropriate emergency service or qualified professional."]]; return <main className="launch-more"><section className="launch-proof"><div><p className="kicker">BUILT FOR THE WHOLE JOB</p><h2>A job record that does the chasing for you.</h2></div><div className="proof-grid"><article><span>01</span><b>One shared conversation</b><p>No forwarding screenshots or digging through inboxes. Every update remains with the property job.</p></article><article><span>02</span><b>Proof when it matters</b><p>Photos, completion notes and clear approval create a defensible record of the work.</p></article><article><span>03</span><b>Payment without the loopholes</b><p>Agreed work is authorised before the visit, then captured once the approved work is complete.</p></article></div></section><section className="launch-band"><div><p className="kicker">A BETTER EXPERIENCE FOR RESIDENTS</p><h2>Clear updates replace the “when will someone come?” call.</h2></div><ul><li><span>✓</span> Report an issue with photos from a phone</li><li><span>✓</span> See visits and chat updates in one place</li><li><span>✓</span> Review and sign off work remotely</li></ul></section><section className="launch-plan"><div><p className="kicker">LAUNCH PROGRAMME</p><h2>Start with the work you already manage.</h2><p>We are onboarding a limited number of property teams and trade professionals as we expand across the UK.</p></div><div className="plan-card"><small>EARLY ACCESS</small><h3>Shape the first release</h3><p>Get pilot access, guided onboarding and a direct line to the team building Havvo.</p><Link to="contact" go={go} className="primary">Apply for access <span>→</span></Link><em>No long contracts during the pilot.</em></div></section><section className="faq"><p className="kicker">QUESTIONS, ANSWERED</p><h2>Everything you need to know before joining.</h2><div>{faqs.map(([question, answer], index) => <article key={question}><button onClick={() => setOpen(open === index ? null : index)}><span>{question}</span><b>{open === index ? "−" : "+"}</b></button>{open === index && <p>{answer}</p>}</article>)}</div></section><section className="launch-close"><p className="kicker">HAVVO IS COMING</p><h2>Property work should feel more certain.</h2><p>Bring the people, evidence and decisions into one shared flow.</p><Link to="contact" go={go} className="primary">Join the launch list <span>→</span></Link></section></main> }
 
-function PageView({ page, go, sent, setSent }: { page: Page; go: Go; sent: boolean; setSent: (value: boolean) => void }) {
+/* The early-access form.
+
+   Longer than a name-and-email box on purpose. Every answer here is either how a
+   lead gets prioritised (portfolio size, monthly repair volume, whether they want
+   a pilot now) or what gets built next (the software they already run). Asking
+   later means an email round trip that most people never complete.
+
+   Two things keep the length from costing submissions. Only name and email are
+   required — everything else is optional and the API stores nulls happily. And the
+   questions are gated on the role, so a sole-trader plumber is never shown
+   "how many properties do you manage": each person sees around eight fields, not
+   all sixteen. */
+/* A labelled field, with the "optional" marker on the same line as its label.
+
+   `label` is a grid, so a bare `<em>` beside the label text becomes a row of its
+   own and pushes the input down. Over thirteen fields that is most of a screen of
+   height spent saying "optional" — hence one wrapper rather than a span repeated
+   at every call site. The input stays inside the label, so it is still associated
+   with it without needing matching id attributes. */
+function Ask({ text, optional, children }: { text: string; optional?: boolean; children: React.ReactNode }) {
+  return <label><span className="ask">{text}{optional && <em>optional</em>}</span>{children}</label>;
+}
+
+function EarlyAccessForm({ sent, setSent }: { sent: boolean; setSent: (value: boolean) => void }) {
   const [formError, setFormError] = useState("");
-  if (page === "contact") return <main className="simple"><p className="kicker">EARLY ACCESS</p><h1>Let’s make property work feel simpler.</h1><p className="lede">Tell us a little about your work. We’ll be in touch about the Havvo launch programme.</p>{sent ? <div className="success"><b>You’re on the list.</b><p>Thanks — we’ll be in touch soon.</p></div> : <form onSubmit={async (event) => { event.preventDefault(); setFormError(""); const fields = new FormData(event.currentTarget); try { const res = await fetch(`${API_URL}/enquiries`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: fields.get("name"), email: fields.get("email"), role: fields.get("role"), message: fields.get("message") }) }); if (!res.ok) throw new Error("Could not submit"); setSent(true); } catch { setFormError("Something went wrong — please try again or email us directly."); } }}>{formError && <p className="error">{formError}</p>}<label>Your name<input name="name" required placeholder="Name" /></label><label>Work email<input name="email" required type="email" placeholder="you@company.co.uk" /></label><label>I am a<select name="role" required defaultValue=""><option value="" disabled>Select one</option><option>Property manager</option><option>Trade professional</option><option>Landlord</option><option>Other</option></select></label><label>What would you like Havvo to help with?<textarea name="message" rows={4} placeholder="A little context helps us make the launch useful." /></label><button className="primary">Request early access <span>→</span></button></form>}</main>;
+  const [busy, setBusy] = useState(false);
+  const [role, setRole] = useState("");
+  const [trades, setTrades] = useState<string[]>([]);
+  const isTrade = role === "Trade professional";
+  // A landlord with a portfolio has the same question to answer as a managing
+  // agent, just at a different scale.
+  const holdsProperties = role === "Property manager" || role === "Landlord";
+
+  if (sent) return <div className="success"><b>You’re on the list.</b><p>Thanks — we’ll read this properly and come back to you about the launch programme. If you asked about a pilot, expect a reply from a person rather than an autoresponder.</p></div>;
+
+  return <form onSubmit={async (event) => {
+    event.preventDefault();
+    setFormError(""); setBusy(true);
+    const fields = new FormData(event.currentTarget);
+    // Empty strings are dropped rather than sent: the API stores what it is given,
+    // and "" in a column is indistinguishable from an answer once it is stored,
+    // where null plainly means unanswered.
+    const text = (key: string) => { const value = fields.get(key); return typeof value === "string" && value.trim() ? value.trim() : undefined; };
+    try {
+      const res = await fetch(`${API_URL}/enquiries`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: text("name"), email: text("email"), role, message: text("message"),
+          organisation: text("organisation"), organisationSize: text("organisationSize"),
+          portfolioSize: text("portfolioSize"), trades: trades.length ? trades : undefined,
+          phone: text("phone"), serviceArea: text("serviceArea"), postcode: text("postcode"), website: text("website"),
+          currentSoftware: text("currentSoftware"), monthlyJobs: text("monthlyJobs"),
+          biggestChallenge: text("biggestChallenge"), pilotInterest: text("pilotInterest"),
+          marketingConsent: fields.get("marketingConsent") === "on",
+          ...attribution(),
+        }),
+      });
+      if (!res.ok) throw new Error("Could not submit");
+      setSent(true);
+    } catch {
+      setFormError("Something went wrong — please try again, or email hello@havvo.co.uk and we’ll add you by hand.");
+    } finally { setBusy(false); }
+  }}>
+    {formError && <p className="error">{formError}</p>}
+
+    <Ask text="Your name"><input name="name" required placeholder="Name" autoComplete="name" /></Ask>
+    <Ask text="Work email"><input name="email" required type="email" placeholder="you@company.co.uk" autoComplete="email" /></Ask>
+    <Ask text="I am a"><select name="role" required value={role} onChange={(event) => setRole(event.target.value)}><option value="" disabled>Select one</option><option>Property manager</option><option>Trade professional</option><option>Landlord</option><option>Tenant or resident</option><option>Other</option></select></Ask>
+
+    {/* Held back until the role is chosen. Showing sixteen fields at once is what
+        makes a form look like work; revealing the relevant half after one click
+        makes the same questions feel answerable. */}
+    {role && <>
+      <Ask text="Company or trading name" optional><input name="organisation" placeholder={isTrade ? "e.g. Okafor Plumbing Ltd" : "e.g. Northern Lettings"} autoComplete="organization" /></Ask>
+
+      {/* Not vanity sizing: a limited company is a corporate subscriber under
+          PECR and a sole trader is not, which changes what we may lawfully send.
+          Asked plainly rather than inferred from whether a name ends in "Ltd". */}
+      {role !== "Tenant or resident" && <Ask text="Size of your business" optional><select name="organisationSize" defaultValue=""><option value="">Prefer not to say</option><option value="sole_trader">Sole trader or just me</option><option value="small">2–10 people</option><option value="medium">11–50 people</option><option value="large">50+ people</option></select></Ask>}
+
+      {holdsProperties && <Ask text="Properties you look after" optional><select name="portfolioSize" defaultValue=""><option value="">Prefer not to say</option><option value="1-10">1–10</option><option value="11-50">11–50</option><option value="51-200">51–200</option><option value="201-1000">201–1,000</option><option value="1000+">1,000+</option></select></Ask>}
+
+      {isTrade && <fieldset className="chips"><legend><span className="ask">What work do you do?<em>optional</em></span></legend><div>{TRADE_OPTIONS.map((trade) => <label key={trade} className={trades.includes(trade) ? "chip on" : "chip"}><input type="checkbox" checked={trades.includes(trade)} onChange={(event) => setTrades((current) => event.target.checked ? [...current, trade] : current.filter((item) => item !== trade))} />{trade}</label>)}</div></fieldset>}
+
+      <div className="row">
+        <Ask text={isTrade ? "Areas you cover" : "Where your properties are"} optional><input name="serviceArea" placeholder="e.g. Greater Manchester" /></Ask>
+        <Ask text="Postcode" optional><input name="postcode" placeholder="M1 1AA" autoComplete="postal-code" /></Ask>
+      </div>
+
+      <div className="row">
+        <Ask text="Phone" optional><input name="phone" type="tel" placeholder="For a quick pilot call" autoComplete="tel" /></Ask>
+        <Ask text="Website" optional><input name="website" type="url" placeholder="https://" /></Ask>
+      </div>
+
+      {role !== "Tenant or resident" && <>
+        {/* The single most useful question on this form. Which integrations get
+            built is a question about what people already run, and a free-text
+            box with suggestions gets a real answer where a fixed list only
+            confirms our own guesses. */}
+        <Ask text="What software do you use today?" optional><input name="currentSoftware" list="software-options" placeholder={isTrade ? "e.g. Tradify, Xero, or none" : "e.g. Fixflo, Reapit, or spreadsheets"} /><datalist id="software-options">{(isTrade ? TRADE_SOFTWARE : MANAGER_SOFTWARE).map((item) => <option key={item} value={item} />)}</datalist></Ask>
+
+        <Ask text={isTrade ? "Jobs you take on in a month" : "Repairs you handle in a month"} optional><select name="monthlyJobs" defaultValue=""><option value="">Prefer not to say</option><option value="0-10">Up to 10</option><option value="11-50">11–50</option><option value="51-200">51–200</option><option value="200+">200+</option></select></Ask>
+
+        <Ask text="What slows you down most today?" optional><textarea name="biggestChallenge" rows={3} placeholder="The specific thing that costs you time or money. This is what we build against." /></Ask>
+
+        {/* Separates a lead to call this week from a name on a launch list. Both
+            are worth having; treating them the same wastes the first. */}
+        <Ask text="How soon would you want to start?" optional><select name="pilotInterest" defaultValue=""><option value="">Not sure yet</option><option value="ready_now">Ready to pilot now</option><option value="few_months">In the next few months</option><option value="just_following">Just following along</option></select></Ask>
+      </>}
+
+      <Ask text="Anything else?" optional><textarea name="message" rows={3} placeholder="A little context helps us make the launch useful." /></Ask>
+
+      {/* Unticked by default, and it must stay that way. Submitting this form is a
+          soft opt-in for a reply about the pilot; an ongoing marketing list needs
+          consent that was actually given, and a pre-ticked box is not consent. */}
+      <label className="consent"><input type="checkbox" name="marketingConsent" /><span>Email me occasional Havvo product updates. We’ll reply about your enquiry either way, and you can unsubscribe from any email in one click.</span></label>
+    </>}
+
+    <button className="primary" disabled={busy}>{busy ? "Sending…" : <>Request early access <span>→</span></>}</button>
+    <p className="fine">We’ll only use this to talk to you about Havvo. No lists are sold or shared.</p>
+  </form>;
+}
+
+function PageView({ page, go, sent, setSent }: { page: Page; go: Go; sent: boolean; setSent: (value: boolean) => void }) {
+  if (page === "contact") return <main className="simple"><p className="kicker">EARLY ACCESS</p><h1>Let’s make property work feel simpler.</h1><p className="lede">Tell us about your work — the more you share, the more useful we can make your pilot. Only your name and email are required.</p><EarlyAccessForm sent={sent} setSent={setSent} /></main>;
   const meta: Record<Exclude<Page,"home"|"contact">, [string,string,string[]]> = { how: ["HOW HAVVO WORKS", "The simple way to keep every repair moving.", ["Report an issue with photos and clear context.", "Bring the right trade into a shared job conversation.", "Approve evidence and capture payment only when work is accepted."]], managers: ["FOR PROPERTY TEAMS", "A calmer control room for every property job.", sections.managers], trades: ["FOR TRADES", "Spend less time chasing. More time doing great work.", sections.trades], pricing: ["PRICING", "Straightforward pricing for a healthier property workflow.", ["Free early-access accounts during the pilot.", "Trade-managed Stripe payments; Havvo never holds your card details.", "Simple platform fees are shown before approval."]], safety: ["SAFETY & TRUST", "Clear records. Human decisions. Safer property work.", ["Urgent hazards always need qualified professional or emergency support.", "AI triage supports the workflow — it never replaces safety judgement.", "Photos, messages, approvals and payments remain attached to the job."]] };
   const [kicker,title,points] = meta[page as Exclude<Page,"home"|"contact">];
   return <main className="simple"><p className="kicker">{kicker}</p><h1>{title}</h1><p className="lede">Havvo gives everyone involved in a repair one reliable place to coordinate the work and see its outcome.</p><div className="point-list">{points.map((point, index) => <div key={point}><span>0{index + 1}</span><p>{point}</p></div>)}</div><Link to="contact" go={go} className="primary">{page === "pricing" ? "Talk about the pilot" : "Request early access"} <span>→</span></Link></main>;
