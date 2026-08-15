@@ -1,6 +1,7 @@
 name: Deploy marketing site
 
 on:
+  pull_request:
   push:
     branches: [main]
   workflow_dispatch:
@@ -30,7 +31,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     # Skip silently when the Azure credentials secret has not been added yet.
-    if: ${{ secrets.AZURE_CREDENTIALS != '' }}
+    if: ${{ github.ref == 'refs/heads/main' && secrets.AZURE_CREDENTIALS != '' }}
     steps:
       - uses: actions/download-artifact@v4
         with:
