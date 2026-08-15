@@ -30,16 +30,28 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     environment: production
-    # Skip silently when the Azure credentials secret has not been added yet.
-    if: ${{ github.ref == 'refs/heads/main' && secrets.AZURE_CREDENTIALS != '' }}
+    if: ${{ github.ref == 'refs/heads/main' }}
     steps:
       - uses: actions/download-artifact@v4
         with:
           name: dist
           path: dist
+      - name: Check deployment credentials
+        id: credentials
+        env:
+          AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+        run: |
+          if [ -n "$AZURE_CREDENTIALS" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "Azure credentials are not configured; deployment skipped."
+          fi
       - uses: azure/login@v2
+        if: ${{ steps.credentials.outputs.available == 'true' }}
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
           allow-no-subscriptions: true
       - name: Publish static site
+        if: ${{ steps.credentials.outputs.available == 'true' }}
         run: az storage blob upload-batch --account-name havvomktdev24112 --auth-mode login --destination '$web' --source dist --overwrite true --output none
