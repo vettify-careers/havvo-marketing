@@ -66,12 +66,21 @@ jobs:
       # endpoint shared with app. and admin., and it caches — so every automated
       # marketing deploy so far landed in storage while visitors kept the previous
       # bundle until someone purged by hand.
+      #
+      # A failed purge is a warning, not a failure. The deploy publishing service
+      # principal currently has storage rights but not
+      # Microsoft.Cdn/profiles/afdEndpoints/purge/action, and failing here would block
+      # a deploy whose files had already landed correctly. The verify step below is the
+      # real gate: it checks what visitors are served, which is the thing the purge
+      # exists to bring about.
       - name: Purge the CDN
         run: |
-          az afd endpoint purge \
+          if ! az afd endpoint purge \
             --resource-group tradeflow-ai-dev --profile-name havvo-frontdoor-dev \
             --endpoint-name havvo-app-24112 --content-paths '/*' \
-            --domains havvo.co.uk --output none
+            --domains havvo.co.uk --output none; then
+            echo "::warning::Could not purge Front Door. If the verify step below fails, this is why. Grant the deploy principal the CDN Profile Contributor role on havvo-frontdoor-dev to fix it."
+          fi
 
       # Verifies what visitors get. The prerendered HTML is identical between builds,
       # so the hashed asset filename is the only proof of which bundle is live.
