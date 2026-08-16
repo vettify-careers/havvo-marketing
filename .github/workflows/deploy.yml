@@ -6,6 +6,13 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Two deploys uploading into the same $web container at once can leave index.html
+# from one build referencing hashed assets from the other. Queue rather than cancel,
+# so the newest commit on main is what ends up live.
+concurrency:
+  group: deploy-marketing
+  cancel-in-progress: false
+
 permissions:
   contents: read
   id-token: write
@@ -36,22 +43,50 @@ jobs:
         with:
           name: dist
           path: dist
-      - name: Check deployment credentials
-        id: credentials
+      # This used to set available=false and skip the remaining steps, which left the
+      # job green: a run that published nothing was indistinguishable from a real
+      # deploy, and the tick was the only thing anyone looked at. A push to main is a
+      # request to deploy, so missing credentials are a failure.
+      - name: Require deployment credentials
         env:
           AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
         run: |
-          if [ -n "$AZURE_CREDENTIALS" ]; then
-            echo "available=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "available=false" >> "$GITHUB_OUTPUT"
-            echo "Azure credentials are not configured; deployment skipped."
+          if [ -z "${AZURE_CREDENTIALS:-}" ]; then
+            echo "::error::AZURE_CREDENTIALS is not set on this repository, so the build cannot be published."
+            exit 1
           fi
       - uses: azure/login@v2
-        if: ${{ steps.credentials.outputs.available == 'true' }}
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
           allow-no-subscriptions: true
       - name: Publish static site
-        if: ${{ steps.credentials.outputs.available == 'true' }}
         run: az storage blob upload-batch --account-name havvomktdev24112 --auth-mode login --destination '$web' --source dist --overwrite true --output none
+
+      # The upload alone was never enough. havvo.co.uk sits behind a Front Door
+      # endpoint shared with app. and admin., and it caches — so every automated
+      # marketing deploy so far landed in storage while visitors kept the previous
+      # bundle until someone purged by hand.
+      - name: Purge the CDN
+        run: |
+          az afd endpoint purge \
+            --resource-group tradeflow-ai-dev --profile-name havvo-frontdoor-dev \
+            --endpoint-name havvo-app-24112 --content-paths '/*' \
+            --domains havvo.co.uk --output none
+
+      # Verifies what visitors get. The prerendered HTML is identical between builds,
+      # so the hashed asset filename is the only proof of which bundle is live.
+      - name: Verify the deployed site
+        run: |
+          set -euo pipefail
+          ASSET=$(grep -oE '/assets/index-[A-Za-z0-9_-]+\.js' dist/index.html | head -1)
+          echo "Expecting $ASSET"
+          for attempt in $(seq 1 10); do
+            if curl -fsS --max-time 20 "https://havvo.co.uk$ASSET" -o /dev/null; then
+              echo "havvo.co.uk is serving $ASSET"
+              exit 0
+            fi
+            echo "Attempt $attempt: not live yet, waiting 15s"
+            sleep 15
+          done
+          echo "::error::havvo.co.uk never served $ASSET. The upload succeeded, so check the Front Door purge and route."
+          exit 1
